@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thesis-research-agent"
+version = "0.1.0"
+description = "A multi-agent research and development environment for academic thesis work, built on the Claude Agent SDK."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "claude-agent-sdk>=0.1.0",
+    "typer>=0.12.0",
+    "requests>=2.31.0",
+    "caldav>=1.3",  # SOGo calendar (tools/sogo.py)
+]
+
+[project.optional-dependencies]
+# The local web UI. Kept optional so the CLI stays lightweight; install with
+# `pip install -e ".[web]"`.
+web = [
+    "chainlit>=2.0,<3",
+]
+
+[project.scripts]
+thesis-agent = "thesis_agent.cli:app"
+thesis-agent-web = "thesis_agent.web.launch:main"
+thesis-agent-mcp = "thesis_agent.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# Ship the Chainlit config + welcome screen alongside the web package so a
+# non-editable install can still find them next to app.py.
+"thesis_agent.web" = ["chainlit.md", ".chainlit/config.toml"]

@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.thesis-agent/
+.env
+.DS_Store
+.claude/
+
+# Sensitive/patient data root (default location; THESIS_AGENT_SENSITIVE_DIR
+# can point elsewhere). Never tracked, never pushed, never read by any agent
+# tool -- see src/thesis_agent/security.py.
+/sensitive_data/
+
+# Chainlit runtime state: per-session files (chat/audit panels) and the
+# config it auto-generates when launched from the repo root. The shipped
+# config lives in src/thesis_agent/web/.chainlit/.
+.files/
+/.chainlit/
+.pytest_cache/
