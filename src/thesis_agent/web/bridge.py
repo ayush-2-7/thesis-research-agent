@@ -7,18 +7,19 @@ y/N prompt. Here it is `WebApprovalBroker.request_approval`, which:
   1. parks the request on an `asyncio.Queue` with a fresh `Future`, and
   2. awaits that Future.
 
-A single consumer task in the Chainlit app (running in a known-good Chainlit
-session context) drains the queue, renders one Allow/Deny prompt at a time, and
-resolves the Future -- which unblocks the hook and lets the agent proceed.
+A single consumer task per browser session (server.py) drains the queue,
+pushes each request to the browser as an approval card, and resolves the
+Future when the human clicks -- which unblocks the hook and lets the agent
+proceed.
 
 This queue+consumer indirection is deliberate: the hook runs inside an
-SDK-spawned asyncio task whose contextvars may not carry Chainlit's per-session
-context, so the hook must not touch Chainlit directly. It only ever touches
-asyncio primitives here. Serializing prompts through one consumer also means
-concurrent approvals from parallel subagents queue up instead of colliding on
-one input channel.
+SDK-spawned asyncio task, so it must not touch the UI layer directly. It only
+ever touches asyncio primitives here. Serializing prompts through one consumer
+also means concurrent approvals from parallel subagents queue up instead of
+colliding on one input channel.
 
-Nothing in this module imports Chainlit, so it is unit-testable on its own.
+Nothing in this module imports a web framework, so it is unit-testable on its
+own.
 """
 
 from __future__ import annotations
@@ -61,8 +62,8 @@ class WebApprovalBroker:
 
         The Future is never given a timeout here -- a local UI should wait for
         the human indefinitely. The consumer is responsible for any timeout
-        policy (Chainlit's own action timeout), and fails closed by resolving
-        the Future to False.
+        policy, and fails closed by resolving the Future to False (the web
+        server does this when the browser tab closes).
         """
         loop = asyncio.get_running_loop()
         pending = PendingApproval(request=request, future=loop.create_future())

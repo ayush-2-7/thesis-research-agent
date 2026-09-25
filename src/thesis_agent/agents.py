@@ -256,7 +256,9 @@ def build_agents(cfg: WorkspaceConfig) -> dict[str, AgentDefinition]:
             ),
             tools=["Read", "Grep", "Glob", "Write"],
             model=FAST_MODEL,  # mechanical: list + read + summarize files
-            maxTurns=8,
+            # 8 was too few for a real thesis folder: it ran out mid-survey
+            # and the orchestrator reached for a generic helper to finish.
+            maxTurns=20,
         ),
         "research-agent": AgentDefinition(
             description=(

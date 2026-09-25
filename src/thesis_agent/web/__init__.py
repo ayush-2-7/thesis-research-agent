@@ -1,1 +1,1 @@
-"""Local web frontend (Chainlit) for the thesis research agent."""
+"""Local web frontend (FastAPI + WebSocket) for the thesis research agent."""

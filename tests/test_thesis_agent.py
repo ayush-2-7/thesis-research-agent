@@ -779,3 +779,203 @@ def test_calendar_unreachable_is_friendly(monkeypatch):
     monkeypatch.setattr(caldav, "DAVClient", boom)
     with pytest.raises(sogo.SogoError, match="not reachable"):
         sogo.upcoming_events_text("u", "pw")
+
+
+# --------------------------------------------------------------------------
+# Web UI server (FastAPI + WebSocket)
+# --------------------------------------------------------------------------
+from fastapi.testclient import TestClient  # noqa: E402
+from starlette.websockets import WebSocketDisconnect  # noqa: E402
+
+LOCAL = "http://127.0.0.1:8000"
+# TestClient ignores base_url for WebSockets (sends Host: testserver).
+WS_HEADERS = {"origin": LOCAL, "host": "127.0.0.1:8000"}
+
+
+class FakeSDKClient:
+    """Stands in for ClaudeSDKClient: one tool call, then an answer."""
+
+    def __init__(self, options=None):
+        self.options = options
+        self.prompts = []
+
+    async def connect(self):
+        pass
+
+    async def disconnect(self):
+        pass
+
+    async def interrupt(self):
+        pass
+
+    async def query(self, prompt):
+        self.prompts.append(prompt)
+
+    async def receive_response(self):
+        from claude_agent_sdk import (AssistantMessage, TextBlock, ToolResultBlock,
+                                      ToolUseBlock, UserMessage)
+        yield AssistantMessage(content=[ToolUseBlock(id="t1", name="Read",
+                                                     input={"file_path": "notes.md"})],
+                               model="m")
+        yield UserMessage(content=[ToolResultBlock(tool_use_id="t1", content="hello")])
+        yield AssistantMessage(content=[TextBlock(text="**Done.**")], model="m")
+
+
+@pytest.fixture
+def web(workspace, monkeypatch, tmp_path):
+    from thesis_agent.web import server
+    monkeypatch.setattr(server, "ClaudeSDKClient", FakeSDKClient)
+    monkeypatch.setattr(bridge, "RECENTS_PATH", tmp_path / "recents.json")
+    monkeypatch.setenv("THESIS_AGENT_WORKSPACE", str(workspace.workspace_dir))
+    return TestClient(server.create_app(), base_url=LOCAL)
+
+
+def _recv_until(ws, wanted):
+    seen = []
+    while True:
+        msg = ws.receive_json()
+        seen.append(msg)
+        if msg["type"] == wanted:
+            return msg, seen
+
+
+def test_web_index_served_only_to_localhost(web):
+    assert web.get("/").status_code == 200
+    assert "Thesis Agent" in web.get("/").text
+    assert web.get("/", headers={"host": "evil.example"}).status_code == 400
+
+
+def test_web_ws_rejects_foreign_origin(web):
+    with pytest.raises(WebSocketDisconnect):
+        with web.websocket_connect("/ws", headers={"origin": "https://evil.example",
+                                                   "host": "127.0.0.1:8000"}) as ws:
+            ws.receive_json()
+
+
+def test_web_ws_rejects_missing_origin(web):
+    with pytest.raises(WebSocketDisconnect):
+        with web.websocket_connect("/ws", headers={"host": "127.0.0.1:8000"}) as ws:
+            ws.receive_json()
+
+
+def test_web_full_turn(web, workspace):
+    with web.websocket_connect("/ws", headers=WS_HEADERS) as ws:
+        ws.send_json({"type": "hello"})
+        session, _ = _recv_until(ws, "session")
+        assert session["workspace"] == str(workspace.workspace_dir)
+        assert {f["key"] for f in session["focus_areas"]} >= {"planning", "coding"}
+
+        ws.send_json({"type": "prompt", "text": "status?", "focus": "planning"})
+        end, seen = _recv_until(ws, "turn_end")
+        kinds = [m["type"] for m in seen]
+        assert kinds.index("tool_start") < kinds.index("tool_end") < kinds.index("text")
+        start = next(m for m in seen if m["type"] == "tool_start")
+        assert start["label"] == "Read" and start["kind"] == "read"
+        assert start["detail"] == "notes.md"
+        assert next(m for m in seen if m["type"] == "text")["text"] == "**Done.**"
+
+
+def test_web_prompt_carries_focus_directive(web, monkeypatch):
+    from thesis_agent.web import server
+    made = []
+    monkeypatch.setattr(server, "ClaudeSDKClient",
+                        lambda options=None: made.append(FakeSDKClient(options)) or made[-1])
+    with web.websocket_connect("/ws", headers=WS_HEADERS) as ws:
+        ws.send_json({"type": "hello"})
+        _recv_until(ws, "session")
+        ws.send_json({"type": "prompt", "text": "fix tests", "focus": "coding"})
+        _recv_until(ws, "turn_end")
+    assert made[-1].prompts[0].startswith("[Session focus: Coding")
+
+
+def test_web_no_workspace_asks_for_one(web, monkeypatch):
+    monkeypatch.delenv("THESIS_AGENT_WORKSPACE")
+    with web.websocket_connect("/ws", headers=WS_HEADERS) as ws:
+        ws.send_json({"type": "hello"})
+        msg, _ = _recv_until(ws, "need_workspace")
+        ws.send_json({"type": "set_workspace", "path": "/definitely/not/here"})
+        msg, _ = _recv_until(ws, "need_workspace")
+        assert "does not exist" in msg["error"]
+
+
+def test_web_lockdown_toggle(web, workspace):
+    with web.websocket_connect("/ws", headers=WS_HEADERS) as ws:
+        ws.send_json({"type": "hello"})
+        _recv_until(ws, "session")
+        ws.send_json({"type": "lockdown", "active": True})
+        msg, _ = _recv_until(ws, "lockdown")
+        assert msg["active"] and workspace.lockdown_file.exists()
+        ws.send_json({"type": "lockdown", "active": False})
+        msg, _ = _recv_until(ws, "lockdown")
+        assert not msg["active"] and not workspace.lockdown_file.exists()
+
+
+class _FakeWS:
+    def __init__(self):
+        self.sent = []
+
+    async def send_text(self, text):
+        import json as _json
+        self.sent.append(_json.loads(text))
+
+
+def test_web_session_approval_roundtrip_and_fail_closed():
+    from thesis_agent.permissions import ApprovalRequest
+    from thesis_agent.web.server import Session
+
+    async def inner():
+        s = Session(_FakeWS())
+        s.broker = bridge.WebApprovalBroker()
+        s.consumer = asyncio.create_task(s._consume_approvals())
+
+        allowed = asyncio.create_task(
+            s.broker.request_approval(ApprovalRequest("Write", "coding", "/x.py", "t9")))
+        await asyncio.sleep(0.01)
+        req = next(m for m in s.ws.sent if m["type"] == "approval_request")
+        assert req["label"] == "Write" and req["kind"] == "write" and req["tool_use_id"] == "t9"
+        await s.handle({"type": "approval", "id": req["id"], "decision": "allow"})
+        first = await allowed
+
+        pending = asyncio.create_task(
+            s.broker.request_approval(ApprovalRequest("Bash", "coding", "ls", "t10")))
+        await asyncio.sleep(0.01)
+        await s.stop()  # tab closed: anything still waiting must be denied
+        return first, await pending
+
+    assert _run(inner()) == (True, False)
+
+
+def test_tool_labels():
+    from thesis_agent.web.server import tool_detail, tool_label
+    assert tool_label("mcp__sogo__save_draft") == ("Save draft", "mail")
+    assert tool_label("mcp__sogo__upcoming_events")[1] == "calendar"
+    assert tool_label("Agent") == ("Delegate", "agent")
+    assert tool_detail("Bash", {"command": "pytest  -q\n"}) == "pytest -q"
+
+
+# --------------------------------------------------------------------------
+# Delegation limited to this project's own subagents
+# --------------------------------------------------------------------------
+def test_allowed_subagents_match_defined_agents(workspace):
+    from thesis_agent.agents import build_agents
+    assert security.ALLOWED_SUBAGENTS == set(build_agents(workspace))
+
+
+@pytest.mark.parametrize("inp", [
+    {"description": "Continue survey", "prompt": "..."},                 # no type
+    {"subagent_type": "general-purpose", "prompt": "..."},
+    {"subagent_type": "Explore", "prompt": "..."},
+])
+def test_generic_agent_delegation_blocked(workspace, inp):
+    v = ev("Agent", inp, workspace)
+    assert v.blocked and "thesis-agent" in v.reason
+
+
+def test_own_subagent_delegation_allowed(workspace):
+    assert not ev("Agent", {"subagent_type": "thesis-agent", "prompt": "status"},
+                  workspace).blocked
+
+
+def test_thesis_agent_turn_cap_raised(workspace):
+    from thesis_agent.agents import build_agents
+    assert build_agents(workspace)["thesis-agent"].maxTurns >= 20

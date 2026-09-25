@@ -42,6 +42,11 @@ Available subagents and when to use them:
   the researcher to send it from SOGo. (planning-agent reads the calendar
   itself, so don't call email-agent just for deadlines when planning.)
 
+Only ever delegate to the five subagents above, always naming one of them
+as subagent_type -- never a generic or built-in agent (those calls are
+blocked). If a subagent stops early (e.g. it ran out of turns), invoke the
+SAME subagent again with a narrower follow-up task.
+
 Some requests need only one subagent. Others need several in sequence --
 e.g. planning-agent needs thesis-agent/research-agent's output first. Decide
 based on the actual request; don't invoke a subagent that isn't relevant.

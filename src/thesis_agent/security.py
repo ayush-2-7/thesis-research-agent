@@ -77,6 +77,15 @@ DANGEROUS_BASH_PATTERNS = (
 # project (tools/sogo.py can only APPEND to Drafts), but this blocks any
 # send-like tool name outright -- including ones that don't exist yet or
 # arrive via an inherited connector -- plus the old Gmail connector entirely.
+# The only subagents the orchestrator may delegate to (agents.py). Without
+# this the CLI also offers its built-in generic agents ("general-purpose",
+# "Explore", ...), which don't carry this project's narrow tool lists or
+# prompts -- seen in practice when thesis-agent hit its turn cap and the
+# orchestrator spun up a generic helper that asked for shell access.
+ALLOWED_SUBAGENTS = frozenset({
+    "thesis-agent", "research-agent", "planning-agent", "coding-agent", "email-agent",
+})
+
 NEVER_SEND_TOOL_RE = re.compile(r"send|reply|forward|smtp|submit", re.IGNORECASE)
 BLOCKED_TOOL_PREFIXES = ("mcp__claude_ai_gmail__",)
 
@@ -225,6 +234,18 @@ def evaluate(tool_name: str, tool_input: dict[str, Any], cfg: WorkspaceConfig) -
         return SecurityVerdict(
             True, f"'{tool_name}' belongs to the Gmail connector, which is disabled."
         )
+
+    # 0c. Delegation only to this project's own subagents.
+    if tool_name in ("Agent", "Task"):
+        subagent = tool_input.get("subagent_type")
+        if subagent not in ALLOWED_SUBAGENTS:
+            return SecurityVerdict(
+                True,
+                f"Delegation to '{subagent or 'a generic agent'}' is not allowed. "
+                f"Use one of: {', '.join(sorted(ALLOWED_SUBAGENTS))}. If a "
+                "subagent ran out of turns, invoke the same subagent again with "
+                "a narrower task.",
+            )
 
     # 1. Sensitive data directory: unreadable/unwritable/unreferenceable by
     #    any tool, full stop. Checked before the workspace jail below so

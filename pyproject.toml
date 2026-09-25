@@ -18,9 +18,15 @@ dependencies = [
 
 [project.optional-dependencies]
 # The local web UI. Kept optional so the CLI stays lightweight; install with
-# `pip install -e ".[web]"`.
+# `pip install -e ".[web]"`. wsproto is uvicorn's pure-Python WebSocket backend.
 web = [
-    "chainlit>=2.0,<3",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "wsproto>=1.2",
+]
+test = [
+    "pytest>=8",
+    "httpx>=0.27",  # FastAPI TestClient
 ]
 
 [project.scripts]
@@ -32,6 +38,5 @@ thesis-agent-mcp = "thesis_agent.mcp_server:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-# Ship the Chainlit config + welcome screen alongside the web package so a
-# non-editable install can still find them next to app.py.
-"thesis_agent.web" = ["chainlit.md", ".chainlit/config.toml"]
+# Ship the web UI's static frontend with the package.
+"thesis_agent.web" = ["static/*"]

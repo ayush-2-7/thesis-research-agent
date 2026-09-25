@@ -76,28 +76,35 @@ thesis-agent-web --workspace ~/path/to/thesis   # opens http://localhost:8000
 thesis-agent-web                                # later: reuses the last workspace
 ```
 
-A local [Chainlit](https://chainlit.io) app (nothing leaves your machine that
-the CLI wouldn't also send). The workspace comes from `--workspace`, else the
-`THESIS_AGENT_WORKSPACE` env var, else the last one used; the browser only
-asks for a path if none of those exist (a 📁 **Change workspace** button
-switches mid-session). The landing message offers focus buttons --
-Planning, Research, Coding, Learning -- that pre-route every following
-message to the right subagent(s), so the orchestrator skips ones that area
-doesn't need; you can also just type without picking one. Streamed
-answers show each tool call as a collapsible step; anything that writes files,
-runs shell, or saves an email draft pauses for an **Allow / Deny** click instead of a
-terminal `y/N`. A sidebar shows a live audit trail, the protected
-sensitive-data directory, and a 🔴 **LOCKDOWN** kill switch that freezes every
-tool call instantly.
+A local web app (FastAPI + one WebSocket, hand-built HTML/CSS/JS in
+`src/thesis_agent/web/static/`, no build step and no CDN -- the page loads
+nothing from the internet). Dark by default with a light theme, and
+responsive down to phone width.
 
-The web UI reuses the exact same orchestrator, subagents, security checks, and
+- **Workspace** comes from `--workspace`, else `THESIS_AGENT_WORKSPACE`, else
+  the last one used; the browser only asks when none of those exist. Click the
+  workspace card to switch.
+- **Focus** -- Planning, Research, Coding, Learning -- pre-routes every
+  message to the right subagent(s); or just type without picking one.
+- **Live steps**: each tool call appears as it runs, with subagent calls
+  nested under the delegation that started them; click a step for its input
+  and result. The final answer renders as Markdown (tables, code blocks
+  with copy buttons).
+- **Approvals**: anything that writes files, runs shell or saves an email
+  draft shows an approval card above the composer (queued if several),
+  highlights the step that's waiting, and flags the browser tab. **Esc**
+  denies. Closing the tab denies whatever is still pending.
+- **Activity** sidebar: every allow / deny / block as it happens, plus the
+  protected sensitive-data directory and a **Lockdown** switch that freezes
+  every tool call instantly.
+
+The web UI reuses the exact same orchestrator, subagents, security checks and
 audit log as the CLI -- it only swaps the terminal approval prompt for browser
-buttons. Port override: `THESIS_AGENT_WEB_PORT=8501 thesis-agent-web`.
-
-> **First launch on macOS may hang for 1-3 minutes** the first time, while
-> Gatekeeper does a one-time online notarization check on Chainlit's freshly
-> installed native dependencies (worse behind some VPNs). It's a one-time cost
-> per install -- subsequent launches are fast.
+buttons. It binds to `127.0.0.1` only, rejects non-localhost `Host` headers,
+and only accepts WebSocket connections from a localhost `Origin`, so another
+website open in your browser can't connect to it and click "Allow".
+Port override: `THESIS_AGENT_WEB_PORT=8501 thesis-agent-web`; add
+`--no-browser` to skip opening a tab.
 
 ### Claude Desktop (MCP connector)
 
@@ -287,10 +294,11 @@ orchestrator (routes requests, has no direct tools besides Agent/Read)
   PII/PHI heuristics, lockdown switch), explained in
   [Security model](#security-model).
 - `cli.py` -- the interactive REPL entrypoint.
-- `web/` -- the local Chainlit UI (`[web]` extra). `bridge.py` is UI-agnostic
+- `web/` -- the local web UI (`[web]` extra). `bridge.py` is UI-agnostic
   (approval queue/broker, event bus, lockdown toggle, recent-workspace memory);
-  `app.py` is the Chainlit app; `launch.py` is the `thesis-agent-web` entry
-  point. It reuses everything above unchanged.
+  `server.py` is the FastAPI + WebSocket server (protocol documented at the
+  top of the file); `static/` is the frontend; `launch.py` is the
+  `thesis-agent-web` entry point. It reuses everything above unchanged.
 - `mcp_server.py` -- a standalone local MCP server (`thesis-agent-mcp`) for
   Claude Desktop. Here *Claude* is the orchestrator and calls granular tools
   (`read_workspace_file`, `search_arxiv`, `git_log`, ...); each one routes
@@ -341,7 +349,7 @@ take**. Both are set in `agents.py`:
 | Agent | Model | Turn cap | Why |
 |---|---|---|---|
 | orchestrator | smart | — | must reliably invoke a subagent, wait, then synthesize |
-| thesis-agent | fast | 8 | list/read files (mechanical) |
+| thesis-agent | fast | 20 | list/read files (mechanical; a real thesis folder needs the room) |
 | email-agent | fast | 10 | SOGo search/read (mechanical) |
 | coding-agent | fast | 12 | inspect/edit/run (bump to smart if correctness suffers) |
 | research-agent | smart | 15 | reads/compares abstracts (real reasoning) |
